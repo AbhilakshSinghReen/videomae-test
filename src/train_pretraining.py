@@ -1,3 +1,4 @@
+from datetime import datetime
 import random
 
 import torch
@@ -6,6 +7,7 @@ from transformers import VideoMAEForPreTraining, VideoMAEImageProcessor, VideoMA
 from tqdm import tqdm
 
 from src.data_loader import DataLoader, TRAIN_BATCH_SIZE
+from src.logger import setup_logger
 from src.models.utils.TubeMaskGenerator import TubeMaskGenerator
 
 import numpy as np
@@ -15,6 +17,9 @@ NUM_EPOCHS = 50
 DEVICE_NAME = "cuda:1"
 
 device = torch.device(DEVICE_NAME)
+
+session_id = f"pretraining-{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
+logger = setup_logger(session_id)
 
 
 def training_epoch(dataset):
@@ -29,7 +34,8 @@ def training_epoch(dataset):
     sample_indices = [i for i in range(len(dataset))]
     random.shuffle(sample_indices)
     
-    epoch_total_loss = 0.0
+    epoch_total_training_loss = 0.0
+    epoch_total_validation_loss = 100.0
 
     for sample_index in tqdm(sample_indices):
         sample = dataset[sample_index]
@@ -74,64 +80,18 @@ def training_epoch(dataset):
         loss.backward()
         videomae_for_pretraining_optimizer.step()
 
-        epoch_total_loss += loss.item()
-        # print(loss)
-        
-        continue
+        training_batch_loss_value = loss.item()
+        epoch_total_training_loss += training_batch_loss_value
 
-
-        print(type(batch_clips_ndarray))
-        print(batch_clips_ndarray.dtype)
-        print(batch_clips_ndarray.shape)
-        print(type(batch_labels))
-        print(batch_labels)
-        exit()
-        continue
-
-        for clip in clips:
-            transformed_clip_frames = [transform(frame) for frame in clip]
-            clip_tensor = torch.stack(transformed_clip_frames)
-            # clip_tensor is of shape (16, 3, 224, 224)
-            # we will add a batch dimension
-            batched_clip_tensor = clip_tensor.unsqueeze(0)
-            batched_clip_tensor = batched_clip_tensor.to(device)
-
-            clip_mask = tube_mask_generator.generate_mask()
-            clip_mask = np.concatenate([clip_mask[np.newaxis, ...] for _ in range(128)])
-            # print(clip_mask.dtype)
-            clip_mask_tensor = torch.from_numpy(clip_mask)
-            batched_clip_mask_tensor = clip_mask_tensor.unsqueeze(0)
-            batched_clip_mask_tensor = batched_clip_mask_tensor.to(device)
-
-            # Create a random boolean tensor
-            
-            # random_bool_tensor[0][1] = True
-            # random_bool_tensor[0][2] = True
-            # random_bool_tensor[0][3] = True
-            # random_bool_tensor[0][4] = True
-            # random_bool_tensor[0][5] = True
-            # random_bool_tensor[0][6] = True
-            # random_bool_tensor[0][7] = True
-
-            # print(clip_tensor.shape)
-            # print(batched_clip_tensor.shape)
-            # print(batched_clip_tensor.dtype)
-            # # print(clip_mask_tensor.shape)
-            # print(random_bool_tensor.shape)
-            # print(random_bool_tensor.dtype)
-
-            # print(videomae_config)
-            # print(videomae_config.tubelet_size)
-            # print(videomae_config.image_size)
-            # print(videomae_config.patch_size)
-            # sequence_length = (videomae_config.num_frames // videomae_config.tubelet_size) * (videomae_config.image_size // videomae_config.patch_size) ** 2.
-            # print(sequence_length)
-            # exit()
-
-    epoch_average_loss = epoch_total_loss / len(dataset)
-            
+        logger.info(f"training_batch_{sample_index}_loss={training_batch_loss_value}")    
     
-    return epoch_average_loss
+    logger.info(f"epoch_total_training_loss={epoch_total_training_loss}")
+    logger.info(f"epoch_total_training_loss={epoch_total_validation_loss}")
+    
+    epoch_average_training_loss = epoch_total_training_loss / len(dataset)
+    epoch_average_validation_loss = epoch_total_validation_loss / len(dataset)
+    
+    return epoch_average_training_loss, epoch_average_validation_loss
 
 
 def main():
@@ -139,12 +99,16 @@ def main():
         "/home/chetan_madan/scratch/abhilaksh/datasets/focus-mae-dataset-new",
         "pretrain"
     )
-    print("Dataset loaded.")
+    logger.info("Dataset loaded.")
 
     for epoch_index in range(NUM_EPOCHS):
-        epoch_average_loss = training_epoch(dataset)
+        logger.info(f"Starting epoch {epoch_index}")
+        epoch_average_training_loss, epoch_average_validation_loss = training_epoch(dataset)
 
-        print(f"Epoch {epoch_index + 1}, epoch_average_loss={epoch_average_loss}")
+        logger.info(f"epoch_average_training_loss={epoch_average_training_loss}")
+        logger.info(f"epoch_average_validation_loss={epoch_average_validation_loss}")
+
+        logger.info(f"Epoch {epoch_index} completed.")
 
 
 if __name__ == "__main__":
