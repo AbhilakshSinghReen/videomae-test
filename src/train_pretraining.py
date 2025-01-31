@@ -2,15 +2,13 @@ from datetime import datetime
 import random
 
 import torch
-import torchvision.transforms as transforms
+from torch.utils import tensorboard
 from transformers import VideoMAEForPreTraining, VideoMAEImageProcessor, VideoMAEConfig
 from tqdm import tqdm
 
 from src.data_loader import DataLoader, TRAIN_BATCH_SIZE
 from src.logger import setup_logger
 from src.models.utils.TubeMaskGenerator import TubeMaskGenerator
-
-import numpy as np
 
 
 NUM_EPOCHS = 50
@@ -21,8 +19,10 @@ device = torch.device(DEVICE_NAME)
 session_id = f"pretraining-{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
 logger = setup_logger(session_id)
 
+tensorboard_summary_writer = tensorboard.SummaryWriter(f"tensorboard-logs/{session_id}")
 
-def training_epoch(dataset):
+
+def training_epoch(epoch_index, dataset):
     # Init main model
     videomae_config = VideoMAEConfig.from_pretrained("MCG-NJU/videomae-base")
     videomae_for_pretraining_model = VideoMAEForPreTraining(videomae_config).to(device)
@@ -37,6 +37,7 @@ def training_epoch(dataset):
     epoch_total_training_loss = 0.0
     epoch_total_validation_loss = 100.0
 
+    batch_iteration_num = 0
     for sample_index in tqdm(sample_indices):
         sample = dataset[sample_index]
         batched_clips_tensor, batch_labels = sample
@@ -83,7 +84,15 @@ def training_epoch(dataset):
         training_batch_loss_value = loss.item()
         epoch_total_training_loss += training_batch_loss_value
 
-        logger.info(f"training_batch_{sample_index}_loss={training_batch_loss_value}")    
+        logger.info(f"training_batch_{sample_index}_loss={training_batch_loss_value}")
+
+        tensorboard_summary_writer.add_scalar(
+            f"epoch_training_batch_loss/epoch_{epoch_index}",
+            training_batch_loss_value,
+            batch_iteration_num
+        )
+        
+        batch_iteration_num += 1
     
     logger.info(f"epoch_total_training_loss={epoch_total_training_loss}")
     logger.info(f"epoch_total_training_loss={epoch_total_validation_loss}")
@@ -103,12 +112,17 @@ def main():
 
     for epoch_index in range(NUM_EPOCHS):
         logger.info(f"Starting epoch {epoch_index}")
-        epoch_average_training_loss, epoch_average_validation_loss = training_epoch(dataset)
+        epoch_average_training_loss, epoch_average_validation_loss = training_epoch(epoch_index, dataset)
 
         logger.info(f"epoch_average_training_loss={epoch_average_training_loss}")
         logger.info(f"epoch_average_validation_loss={epoch_average_validation_loss}")
 
+        tensorboard_summary_writer.add_scalar("epoch_average_training_loss", epoch_average_training_loss, epoch_index)
+        tensorboard_summary_writer.add_scalar("epoch_average_validation_loss", epoch_average_validation_loss, epoch_index)
+
         logger.info(f"Epoch {epoch_index} completed.")
+    
+    tensorboard_summary_writer.close()
 
 
 if __name__ == "__main__":

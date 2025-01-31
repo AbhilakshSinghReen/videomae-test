@@ -1,4 +1,5 @@
 **/__pycache__
 
 logs/*
+tensorboard-logs/*
 checkpoints/*
