@@ -1,6 +1,7 @@
 from datetime import datetime
 import random
 
+import numpy as np
 import torch
 from torch.utils import tensorboard
 from transformers import VideoMAEForPreTraining, VideoMAEImageProcessor, VideoMAEConfig
@@ -9,6 +10,7 @@ from tqdm import tqdm
 from src.data_loader import DataLoader, TRAIN_BATCH_SIZE
 from src.logger import setup_logger
 from src.models.utils.TubeMaskGenerator import TubeMaskGenerator
+from src.masking.TubeMaskingGenerator import TubeMaskingGenerator
 
 
 NUM_EPOCHS = 50
@@ -23,13 +25,13 @@ tensorboard_summary_writer = tensorboard.SummaryWriter(f"tensorboard-logs/{sessi
 
 
 def training_epoch(epoch_index, dataset):
+    # Init tube masking generator
+    tube_masking_generator = TubeMaskingGenerator((8, 14, 14), 0.75)
+
     # Init main model
     videomae_config = VideoMAEConfig.from_pretrained("MCG-NJU/videomae-base")
     videomae_for_pretraining_model = VideoMAEForPreTraining(videomae_config).to(device)
     videomae_for_pretraining_optimizer = torch.optim.AdamW(videomae_for_pretraining_model.parameters(), lr=5e-5)
-
-    # Init tube mask generator
-    tube_mask_generator = TubeMaskGenerator(input_size=(16, 224, 224), mask_ratio=0.9)
     
     sample_indices = [i for i in range(len(dataset))]
     random.shuffle(sample_indices)
@@ -44,38 +46,19 @@ def training_epoch(epoch_index, dataset):
 
         batched_clips_tensor = batched_clips_tensor.to(device)
 
-        num_frames = 16
-        num_patches_per_frame = (videomae_config.image_size // videomae_config.patch_size) ** 2
-        seq_length = (num_frames // videomae_config.tubelet_size) * num_patches_per_frame
+        batch_masks = []
+        for _i in range(TRAIN_BATCH_SIZE):
+            batch_masks.append(tube_masking_generator())        
+        batch_masks_ndarray = np.stack(batch_masks, axis=0)
 
-        bool_masked_pos_1 = torch.randint(0, 2, (1, seq_length)).bool()
-        bool_masked_pos_2 = torch.randint(0, 2, (1, seq_length)).bool()
-        bool_masked_pos_3 = torch.randint(0, 2, (1, seq_length)).bool()
-        bool_masked_pos_4 = torch.randint(0, 2, (1, seq_length)).bool()
-        bool_masked_pos = torch.cat([
-            bool_masked_pos_1,
-            bool_masked_pos_1,
-            bool_masked_pos_1,
-            bool_masked_pos_1,
-        ])
-
-        size = (TRAIN_BATCH_SIZE, 1568)
-        random_bool_tensor = torch.rand(size) > 0.5
-        for b in range(0, TRAIN_BATCH_SIZE):
-            for i in range(1411):
-                random_bool_tensor[b][i] = True
-            for i in range(1411, 1568):
-                random_bool_tensor[b][i] = False
-        
-        random_bool_tensor = random_bool_tensor.to(device)
-
-        # print(batched_clips_tensor.shape)
-        # print(random_bool_tensor.shape)
+        batched_masks_tensor = torch.from_numpy(batch_masks_ndarray)
+        batched_masks_tensor = batched_masks_tensor > 0.5
+        batched_masks_tensor = batched_masks_tensor.to(device)
         
         videomae_for_pretraining_optimizer.zero_grad()
         outputs = videomae_for_pretraining_model(
             pixel_values=batched_clips_tensor,
-            bool_masked_pos=random_bool_tensor
+            bool_masked_pos=batched_masks_tensor
         )
         loss = outputs.loss
         loss.backward()
@@ -121,6 +104,7 @@ def main():
         tensorboard_summary_writer.add_scalar("epoch_average_validation_loss", epoch_average_validation_loss, epoch_index)
 
         logger.info(f"Epoch {epoch_index} completed.")
+        print("")
     
     tensorboard_summary_writer.close()
 
